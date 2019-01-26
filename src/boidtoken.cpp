@@ -170,6 +170,9 @@ void boidtoken::stake(name _stake_account, asset _staked)
     const auto &st = statstable.get(sym.code().raw());
     eosio_assert(_staked.is_valid(), "invalid quantity");
     eosio_assert(_staked.amount > 0, "must transfer positive quantity");
+    accounts accts(_self, _stake_account.value);
+    const auto &boid_acct = accts.get(_staked.symbol.code().raw(), "no balance object found");
+    eosio_assert(boid_acct.balance.amount >= _staked.amount, "staking more than available balance");
 
     // minumum stake amount
     uint8_t token_precision = sym.precision();
