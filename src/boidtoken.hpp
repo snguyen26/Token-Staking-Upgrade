@@ -138,6 +138,7 @@ CONTRACT boidtoken : public contract
 
     float     MONTH_STAKE_ROI = 0.50;  // percentage Return On Investment over a 1 month period for staking
     float     MONTH_MULTIPLIERX100 = MONTH_STAKE_ROI / NUM_PAYOUTS_PER_MONTH;    // multiplier in actual reward equation
+    float     BONUS_CUT = 0.70;
 
     const uint8_t   MONTHLY = 1;
     const uint8_t   QUARTERLY = 2;
@@ -165,6 +166,7 @@ CONTRACT boidtoken : public contract
 	// staking reward equation vars:
         float           month_stake_roi;
         float           month_multiplierx100;
+        float           bonus_cut;
         float           bp_bonus_ratio;
         float           bp_bonus_divisor;
         float           bp_bonus_max;
@@ -176,8 +178,8 @@ CONTRACT boidtoken : public contract
         EOSLIB_SERIALIZE (config,
           (config_id)(stakebreak)(bonus)(active_accounts)
           (total_staked)(month_stake_roi)(month_multiplierx100)
-          (bp_bonus_ratio)(bp_bonus_divisor)(bp_bonus_max)
-          (min_stake)(payout_date));
+          (bonus_cut)(bp_bonus_ratio)(bp_bonus_divisor)
+          (bp_bonus_max)(min_stake)(payout_date));
     };
 
     typedef eosio::multi_index<"configs"_n, config> config_table;
@@ -208,10 +210,12 @@ CONTRACT boidtoken : public contract
         name            stake_account;
         asset           staked;
         bool            auto_stake;  // toggle if we want to unstake stake_account at end of season
+        bool            periodStaked; // keeps track of whether acct staked during or end of season
+        uint32_t        stakeWait_date; 
 
         uint64_t        primary_key () const { return stake_account.value; }
 
-        EOSLIB_SERIALIZE (stakerow, (stake_account)(staked)(auto_stake));
+        EOSLIB_SERIALIZE (stakerow, (stake_account)(staked)(auto_stake)(periodStaked)(stakeWait_date));
     };
 
     typedef eosio::multi_index<"stakes"_n, stakerow> staketable;
@@ -275,7 +279,7 @@ EOSIO_DISPATCH(boidtoken,
     (transfer)
     (stakebreak)
     (stake)
-    // (claim)
+    (claim)
     (unstake)
     (initstats)
     (setnewbp)

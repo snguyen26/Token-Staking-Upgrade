@@ -162,7 +162,7 @@ void boidtoken::stake(name _stake_account, asset _staked)
 
     config_table c_t (_self, _self.value);
     auto c_itr = c_t.find(0);
-    eosio_assert(c_itr->stakebreak != 0, "staking is only available during the season break, not mid-season.");
+    //eosio_assert(c_itr->stakebreak != 0, "staking is only available during the season break, not mid-season.");
     eosio_assert(is_account(_stake_account), "stake account does not exist");
 
     auto sym = _staked.symbol;
@@ -188,6 +188,7 @@ void boidtoken::stake(name _stake_account, asset _staked)
     staketable s_t(_self, _self.value);
     auto itr = s_t.find(_stake_account.value);
     eosio_assert(itr == s_t.end(), "Account already has a stake. Must unstake first.");
+    eosio_assert(s_itr->stakeWait_date > now(), "It has not been a week since you've last staked.");
 
     boidpowers bps(_self, _self.value);
     auto bp_acct = bps.find(_stake_account.value);
@@ -204,13 +205,22 @@ void boidtoken::stake(name _stake_account, asset _staked)
         s.stake_account = _stake_account;
         s.staked = _staked;
         s.auto_stake = false;
+        s.periodStaked = false; // user staked during the boid season
     });
     c_t.modify(c_itr, _self, [&](auto &c) {
         c.active_accounts += 1;
         c.total_staked.amount += _staked.amount;
     });
+    
+    if(c_itr->stakebreak != 0) { // if user wants to stake during boid season 
+        s_t.modify(_stake_account, [&](auto &s) { 
+            s.periodStaked = true;
+            s.stakeWait_date += WEEK_WAIT;
+        });
 
-    // user pays for RAM if they are'nt already
+    }
+
+    // user pays for RAM if they aren't already
     sub_balance(
         _stake_account,
         asset{0, symbol("BOID", 4)},
@@ -226,13 +236,13 @@ void boidtoken::sendmessage(name acct, string memo)
 
 /* Claim token-staking bonus for specified account
  */
-/*
+
 void boidtoken::claim(name _stake_account)
 {
     // print("claim\n");
     config_table c_t(_self, _self.value);
     auto c_itr = c_t.find(0);
-    eosio_assert(c_itr->stakebreak == 0, "currently in stake break, cannot claim during stake break, only during season");
+    //eosio_assert(c_itr->stakebreak == 0, "currently in stake break, cannot claim during stake break, only during season");
 
     eosio_assert(c_itr->payout_date <= now(), "You are current on all available claims");
 
@@ -255,6 +265,13 @@ void boidtoken::claim(name _stake_account)
     // staking bonus
     multiplier = c_itr->month_multiplierx100 / 100.0;
     staked_tokens = (s_itr->staked.amount / pow(10, token_precision));
+    
+    
+    if (s_itr->periodStaked == true) { // user staked during season
+        payout_tokens = (c_itr->bonus_cut * multiplier) * staked_tokens; 
+    }
+    
+    // else user staked during season break
     payout_tokens = multiplier * staked_tokens;
 
     // boidpower bonus
@@ -294,7 +311,7 @@ void boidtoken::claim(name _stake_account)
     c_t.modify(c_itr, _self, [&](auto &c) {
         c.payout_date += WEEK_WAIT;
     });
-}*/
+}
 
 /* Unstake tokens for specified _stake_account
  *  - Unstake tokens for specified _stake_account
@@ -319,12 +336,28 @@ void boidtoken::unstake(name _stake_account)
         c.total_staked.amount -= s_itr->staked.amount;
     });
 
+
+    if(s_itr->periodStaked == true) { //user staked in boid season
+        //calculate the total of tokens to be returned to contract account
+        collectFee = s_itr->staked * unstakingFee;
+    
+        // calculate the total of tokens to be returned to user
+        s_itr->staked *= (1 - unstakingFee); 
+
+        // add the fee collected from user to contract acct
+        add_balance(
+            _self,
+            collectFee,
+            _stake_account,
+            true);
+    } 
+
     // move staked tokens back to the unstaked account
-    //add_balance(
-    //    _stake_account,
-    //    s_itr->staked,
-    //    _stake_account,
-    //    true);
+    add_balance(
+       _stake_account,
+       s_itr->staked,
+       _stake_account,
+       true);
 
     // erase staked account from stake table
     s_t.erase(s_itr);
@@ -351,6 +384,7 @@ void boidtoken::initstats()
 
             c.month_stake_roi = MONTH_STAKE_ROI;
             c.month_multiplierx100 = MONTH_STAKE_ROI / NUM_PAYOUTS_PER_MONTH;
+            c.bonus_cut = BONUS_CUT;
             c.bp_bonus_ratio = BP_BONUS_RATIO;
             c.bp_bonus_divisor = BP_BONUS_DIVISOR;
             c.bp_bonus_max = BP_BONUS_MAX;
@@ -369,6 +403,7 @@ void boidtoken::initstats()
 
             c.month_stake_roi = MONTH_STAKE_ROI;
             c.month_multiplierx100 = MONTH_STAKE_ROI / NUM_PAYOUTS_PER_MONTH;
+            c.bonus_cut = BONUS_CUT;
             c.bp_bonus_ratio = BP_BONUS_RATIO;
             c.bp_bonus_divisor = BP_BONUS_DIVISOR;
             c.bp_bonus_max = BP_BONUS_MAX;
