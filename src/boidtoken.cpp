@@ -186,9 +186,9 @@ void boidtoken::stake(name _stake_account, asset _staked)
 
     eosio_assert(_staked.symbol == st.supply.symbol, "symbol precision mismatch");
     staketable s_t(_self, _self.value);
-    auto itr = s_t.find(_stake_account.value);
-    eosio_assert(itr == s_t.end(), "Account already has a stake. Must unstake first.");
-    eosio_assert(s_itr->stakeWait_date > now(), "It has not been a week since you've last staked.");
+    auto s_itr = s_t.find(_stake_account.value);
+    //eosio_assert(s_itr == s_t.end(), "Account already has a stake. Must unstake first.");
+    //eosio_assert(s_itr->stakeWait_date > now(), "It has not been a week since you've last staked.");
 
     boidpowers bps(_self, _self.value);
     auto bp_acct = bps.find(_stake_account.value);
@@ -200,25 +200,32 @@ void boidtoken::stake(name _stake_account, asset _staked)
             a.quantity = 0.0;
         });
     }  // else if they do have boidpower, just leave it the way it is
+    
+    if(s_itr == s_t.end()) {  // acct did not stake anything yet
+        s_t.emplace(_stake_account, [&](auto &s) {
+            s.stake_account = _stake_account;
+            s.staked = _staked;
+            s.auto_stake = false;
+            s.period_staked = 0; 
+            s.stakeWait_date = now();
+        });
+    }
+    else {  // acct has done a stake already 
+        s_t.modify(s_itr, _stake_account, [&](auto &s) {
+            s.staked += _staked;
+        });
 
-    s_t.emplace(_stake_account, [&](auto &s) {
-        s.stake_account = _stake_account;
-        s.staked = _staked;
-        s.auto_stake = false;
-        s.periodStaked = false; // user staked during the boid season
-    });
+        if(c_itr->stakebreak != 0) { // if user wants to stake during boid season 
+            s_t.modify(s_itr, _stake_account, [&](auto &s){
+                s.period_staked = 1;
+            });
+        }
+    }
+    
     c_t.modify(c_itr, _self, [&](auto &c) {
         c.active_accounts += 1;
         c.total_staked.amount += _staked.amount;
     });
-    
-    if(c_itr->stakebreak != 0) { // if user wants to stake during boid season 
-        s_t.modify(_stake_account, [&](auto &s) { 
-            s.periodStaked = true;
-            s.stakeWait_date += WEEK_WAIT;
-        });
-
-    }
 
     // user pays for RAM if they aren't already
     sub_balance(
@@ -267,7 +274,7 @@ void boidtoken::claim(name _stake_account)
     staked_tokens = (s_itr->staked.amount / pow(10, token_precision));
     
     
-    if (s_itr->periodStaked == true) { // user staked during season
+    if (s_itr->period_staked != 0) { // user staked during season
         payout_tokens = (c_itr->bonus_cut * multiplier) * staked_tokens; 
     }
     
@@ -326,7 +333,7 @@ void boidtoken::unstake(name _stake_account)
     } else {
         require_auth( _self );
     }
-    staketable s_t(_self, _self.value);
+staketable s_t(_self, _self.value);
     auto s_itr = s_t.find(_stake_account.value);
     eosio_assert(s_itr != s_t.end(), "stake account does not have any staked tokens");
 
@@ -336,13 +343,20 @@ void boidtoken::unstake(name _stake_account)
         c.total_staked.amount -= s_itr->staked.amount;
     });
 
+    asset collectFee;
+    asset total_after;
+    
+    if (c_itr->stakebreak != 0 && s_itr->period_staked !=0 ) { // currently in boid season &&     
+                                                               //user staked during boid season
+        // s_t.modify(s_itr, _stake_account, [&](auto &s) {
+        //     s.stakeWait_date += WEEK_WAIT;
+        // });  
 
-    if(s_itr->periodStaked == true) { //user staked in boid season
         //calculate the total of tokens to be returned to contract account
-        collectFee = s_itr->staked * unstakingFee;
+        collectFee = s_itr->staked * c_itr->unstaking_fee;
     
         // calculate the total of tokens to be returned to user
-        s_itr->staked *= (1 - unstakingFee); 
+        total_after = s_itr->staked * (1 - c_itr->unstaking_fee); 
 
         // add the fee collected from user to contract acct
         add_balance(
@@ -350,15 +364,30 @@ void boidtoken::unstake(name _stake_account)
             collectFee,
             _stake_account,
             true);
-    } 
 
-    // move staked tokens back to the unstaked account
+        add_balance(
+            _stake_account,
+            total_after,
+            _stake_account,
+            true);
+
+    }
+
     add_balance(
-       _stake_account,
-       s_itr->staked,
-       _stake_account,
-       true);
+        _stake_account,
+        s_itr->staked,
+        _stake_account,
+        true);
 
+    
+
+    // if (amount_after >= c_itr->min_stake) {
+    //     s_t.modify(s_itr, _stake_account, [&](auto &s) {
+    //         s.staked -= quantity;
+    //     });
+    // }
+    
+    // less than the min stake
     // erase staked account from stake table
     s_t.erase(s_itr);
 }
@@ -389,6 +418,8 @@ void boidtoken::initstats()
             c.bp_bonus_divisor = BP_BONUS_DIVISOR;
             c.bp_bonus_max = BP_BONUS_MAX;
             c.min_stake = MIN_STAKE;
+            c.unstaking_fee = UNSTAKING_FEE;
+            c.payout_date = now();
         });
     }
     else
@@ -408,6 +439,8 @@ void boidtoken::initstats()
             c.bp_bonus_divisor = BP_BONUS_DIVISOR;
             c.bp_bonus_max = BP_BONUS_MAX;
             c.min_stake = MIN_STAKE;
+            c.unstaking_fee = UNSTAKING_FEE;
+            c.payout_date = now();
         });
     }
 }
@@ -562,4 +595,5 @@ void boidtoken::add_balance(name owner, asset value, name ram_payer, bool change
         });
     }
 }
+
 
